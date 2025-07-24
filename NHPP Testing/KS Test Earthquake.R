@@ -94,7 +94,7 @@ ks_result <- ks.test(rescaled_interarrivals, "pexp", 1)
 print(ks_result)
       
 #plotting lambda approximation
-plot(median.time, lambda, xlab = "Days since October 1, 2024", ylab = "Earthquakes per Week", main="Earthquake Intensity Approximation λ(t)")
+plot(median.time, lambda, xlab = "Days since October 1, 2024", ylab = "Earthquakes per Week")
 
 lines(median.time, lambda.fn(median.time), lwd=2, col="blue")
 
