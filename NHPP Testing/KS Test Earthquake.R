@@ -5,7 +5,7 @@ library(dplyr)
 library(lubridate)
 
 # Load data
-eq.data <- read.csv("earthquakes.csv", header=TRUE, sep=",")
+eq.data <- read.csv("/Users/ryanrodrigue/Downloads/earthquakes.csv", header=TRUE, sep=",")
 eq.data$datetime <- as.POSIXct(eq.data$datetime, format="%Y-%m-%d %H:%M:%S")
 
 # Filter to October-December 2024 only (most recent 3 month period)
@@ -25,39 +25,37 @@ eq.data <- eq.data[eq.data$elapsed.time > 2, ]
 
 ### MODEL lambda(t) ###
 
-# Create year-month variable
-eq.data$year.month <- format(as.Date(eq.data$datetime), "%Y-%m")
+### MODEL lambda(t) ###
 
-# Number of earthquakes per month
-freq.month <- data.frame(table(eq.data$year.month))
-year.month.unique <- freq.month[,1]
-neq.month <- freq.month[,2]
+# Create year-week variable using ISOweek (from lubridate::isoweek)
+eq.data$year.week <- paste0(year(eq.data$datetime), "-W", sprintf("%02d", isoweek(eq.data$datetime)))
 
-# Number of days per month
-day1.month <- ymd(paste(year.month.unique, "01", sep="-"))
-ndays.month <- monthDays(as.Date(day1.month, "%Y-%m-%d"))
+# Number of earthquakes per week
+freq.week <- data.frame(table(eq.data$year.week))
+year.week.unique <- freq.week[,1]
+neq.week <- freq.week[,2]
+
+# Number of days per week (all are 7, but let's be robust)
+ndays.week <- rep(7, length(neq.week))
 
 # Estimate intensity per day
-lambda <- neq.month / ndays.month
+lambda <- neq.week / ndays.week
 
-# Cumulative number of days to each month
+# Cumulative number of days to each week
 median.time <- c()
 ndays.total <- c()
-median.time[1] <- ndays.month[1] / 2
-ndays.total[1] <- ndays.month[1]
-for (i in 2:length(ndays.month)) {
-  median.time[i] <- ndays.total[i-1] + ndays.month[i]/2
-  ndays.total[i] <- ndays.total[i-1] + ndays.month[i]
+median.time[1] <- ndays.week[1] / 2
+ndays.total[1] <- ndays.week[1]
+for (i in 2:length(ndays.week)) {
+  median.time[i] <- ndays.total[i-1] + ndays.week[i]/2
+  ndays.total[i] <- ndays.total[i-1] + ndays.week[i]
 }
 median.time <- as.numeric(median.time)
 
-# Polynomial regression
+# Polynomial regression (same)
 median.time.re <- median.time / 1000
 median.time.sq <- median.time.re^2
 median.time.cu <- median.time.re^3
-median.time.qd <- median.time.re^4
-median.time.qu <- median.time.re^5
-median.time.sx <- median.time.re^6
 
 model <- lm(lambda ~ median.time.re + median.time.sq + median.time.cu)
 coefs <- coef(model)
@@ -85,7 +83,6 @@ rescaled_times <- sapply(eq.data$time_in_days, function(t) {
   }
 })
 
-
 # Compute rescaled interarrival times
 rescaled_interarrivals <- diff(c(0, rescaled_times))  # Add 0 to start
 
@@ -95,31 +92,17 @@ ks_result <- ks.test(rescaled_interarrivals, "pexp", 1)
 
 # Show results
 print(ks_result)
+      
+#plotting lambda approximation
+plot(median.time, lambda, xlab = "Days since October 1, 2024", ylab = "Earthquakes per Week", main="Earthquake Intensity Approximation λ(t)")
 
-### Construct empirical CDF ###
-elapsed_times <- as.numeric(difftime(eq.data$datetime, start_time, units="days"))
-elapsed_times <- sort(elapsed_times)
-n <- length(elapsed_times)
-empirical_cdf <- (1:n)/n
+lines(median.time, lambda.fn(median.time), lwd=2, col="blue")
 
-# Construct theoretical CDF
-# Define cumulative intensity function Lambda(t) by integrating lambda(t)
-Lambda.fn <- function(t) {
-  sapply(t, function(x) {
-    tryCatch({
-      integrate(lambda.fn, 0, x)$value
-    }, error = function(e) {
-      NA  # Return NA if integration fails
-    })
-  })
-}
-
-theoretical_cdf <- Lambda.fn(elapsed_times)
-theoretical_cdf <- theoretical_cdf / max(theoretical_cdf)  # Normalize to [0,1]
-
-# Plot empirical vs theoretical CDF
-plot(elapsed_times, empirical_cdf, type="s", lwd=2, col="black", 
-     xlab="Days since October 1, 2024", ylab="CDF")
-lines(elapsed_times, theoretical_cdf, col="blue", lwd=2)
-legend("bottomright", legend=c("Empirical CDF", "Theoretical CDF"), 
-       col=c("black", "blue"), lwd=2)
+legend("topright", 
+       legend = c("Observed Weekly Intensity", "Estimated λ(t)"), 
+       col = c("black", "blue"), 
+       pch = c(1, NA), 
+       lty = c(NA, 1), 
+       lwd = c(1, 2),
+       pt.cex = 1.2,
+       bty = "o")
