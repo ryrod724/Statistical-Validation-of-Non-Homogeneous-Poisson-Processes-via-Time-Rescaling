@@ -61,7 +61,7 @@ median.time <- as.numeric(median.time)
 median.time.re <- median.time / 1000
 median.time.sq <- median.time.re^2
 
-model <- lm(lambda ~ median.time.re + median.time.sq + median.time.cu)
+model <- lm(lambda ~ median.time.re + median.time.sq)
 coefs <- coef(model)
 
 # Define estimated lambda(t) function
@@ -94,7 +94,7 @@ print(ks_result)
 ### Plotting λ(t) ###
 plot(median.time, lambda,
      xlab = "Days since October 1, 2024", 
-     ylab = "Earthquakes per Week", 
+     ylab = "Earthquakes per Day", 
      pch = 1)
 
 lines(median.time, lambda.fn(median.time), lwd=2, col="blue")
@@ -107,3 +107,4 @@ legend("topright",
        lwd = c(1, 2),
        pt.cex = 1.2,
        bty = "o")
+
