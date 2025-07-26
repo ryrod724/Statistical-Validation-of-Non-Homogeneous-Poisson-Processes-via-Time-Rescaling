@@ -6,116 +6,92 @@ library(lubridate)
 library(readr)
 
 # Load data
-eq.data <- read_csv("tornadoes.csv") %>%
-  filter(
-    st %in% c("OK", "TX", "KS", "NE"),
-    mo %in% 1:12,
-    yr %in% c(2020)
-  )
+eq.data <- read_csv("/Users/ryanrodrigue/Downloads/tnUS.csv") %>%
+  filter(st %in% c("OK", "TX", "KS", "NE"), yr %in% c(2020))
 
-eq.data$datetime <- as.POSIXct(eq.data$datetime_utc, format="%Y-%m-%d %H:%M:%S")
+eq.data$datetime <- as.POSIXct(eq.data$datetime_utc, format = "%Y-%m-%d %H:%M:%S")
 
-# Lag and interarrival filtering
+# Computing lag
 eq.data$datetime.lag <- c(0, head(eq.data$datetime, -1))
-eq.data <- eq.data[-1, ]
-eq.data$elapsed.time <- (as.numeric(eq.data$datetime) - as.numeric(eq.data$datetime.lag)) / 3600
-eq.data <- eq.data[eq.data$elapsed.time > 1, ]
 
-# Time in days since start
+# Remove first row
+eq.data <- eq.data[-1, ]
+
+# Interarrival times (hours)
+eq.data$elapsed.time <- (as.numeric(eq.data$datetime) - as.numeric(eq.data$datetime.lag)) / 3600
+
+### MODEL lambda(t) ###
+
+# Create year-week variable using ISOweek
+eq.data$year.week <- paste0(year(eq.data$datetime), "-W", sprintf("%02d", isoweek(eq.data$datetime)))
+
+# Number of earthquakes per week
+freq.week <- data.frame(table(eq.data$year.week))
+
+# Weekly variables
+year.week.unique <- freq.week[,1]
+neq.week <- freq.week[,2]
+ndays.week <- rep(7, length(neq.week))  # Assume each week is 7 days
+
+# Estimate intensity per day
+lambda <- neq.week / ndays.week
+
+# Cumulative number of days to each week (for plotting x-axis)
+median.time <- c()
+ndays.total <- c()
+median.time[1] <- ndays.week[1] / 2
+ndays.total[1] <- ndays.week[1]
+for (i in 2:length(ndays.week)) {
+  median.time[i] <- ndays.total[i-1] + ndays.week[i]/2
+  ndays.total[i] <- ndays.total[i-1] + ndays.week[i]
+}
+median.time <- as.numeric(median.time)
+
+# Estimate lambda(t) with Weibull-like function via nonlinear least squares
+weibull.fn <- function(t, a, b, c) {
+  a * (t / b)^(c - 1) * exp(-(t / b)^c)
+}
+weibull.model <- nls(
+  lambda ~ a * (median.time / b)^(c - 1) * exp(-(median.time / b)^c),
+  start = list(a = 1, b = 100, c = 2),
+  control = nls.control(maxiter = 500)
+)
+weibull.coefs <- coef(weibull.model)
+
+# Define new λ(t)
+lambda.fn <- function(t) {
+  weibull.fn(t, weibull.coefs["a"], weibull.coefs["b"], weibull.coefs["c"])
+}
+
+### Time-rescaling ###
+# Create "time in days" since start
 start_time <- min(eq.data$datetime, na.rm = TRUE)
 eq.data$time_in_days <- as.numeric(difftime(eq.data$datetime, start_time, units = "days"))
 
-# Gumbel PDF
-gumbel_pdf <- function(t, mu, beta) {
-  z <- (t - mu) / beta
-  (1 / beta) * exp(-(z + exp(-z)))
-}
-
-# Objective: minimize KS statistic with scaling to observed event count
-objective_fn <- function(params) {
-  mu <- params[1]
-  beta <- params[2]
-
-  # Raw lambda without scaling
-  raw_lambda <- function(t) {
-    gumbel_pdf(t, mu, beta)
-  }
-
-  # Calculate total integral of raw_lambda over observed time
-  total_lambda <- tryCatch(integrate(raw_lambda, 0, max(eq.data$time_in_days))$value,
-                           error = function(e) NA)
-  if (!is.finite(total_lambda) || total_lambda == 0) return(Inf)
-
-  # Scale factor to match expected events with observed number
-  scale_factor <- nrow(eq.data) / total_lambda
-
-  # Scaled lambda function
-  lambda.fn <- function(t) scale_factor * raw_lambda(t)
-
-  # Compute Lambda(t) for each observed time
-  Lambda <- function(t) {
-    sapply(t, function(x) {
-      tryCatch(integrate(lambda.fn, 0, x)$value,
-               error = function(e) NA)
-    })
-  }
-
-  rescaled_times <- Lambda(eq.data$time_in_days)
-  interarrivals <- diff(c(0, rescaled_times))
-
-  # If any non-finite values, return large penalty
-  if (any(!is.finite(interarrivals))) return(Inf)
-
-  # KS test of rescaled interarrival times against Exp(1)
-  ks <- suppressWarnings(ks.test(interarrivals, "pexp", 1))
-  return(ks$statistic)
-}
-
-# Optimize mu and beta (adjust initial guess as needed)
-opt_result <- optim(par = c(40, 10), fn = objective_fn, method = "L-BFGS-B", lower = c(0.01, 0.01))
-mu_opt <- opt_result$par[1]
-beta_opt <- opt_result$par[2]
-cat("Estimated mu:", mu_opt, "\n")
-cat("Estimated beta:", beta_opt, "\n")
-
-# Final scaled lambda function
-raw_lambda <- function(t) gumbel_pdf(t, mu_opt, beta_opt)
-total_lambda <- integrate(raw_lambda, 0, max(eq.data$time_in_days))$value
-scale_factor <- nrow(eq.data) / total_lambda
-lambda.fn <- function(t) scale_factor * raw_lambda(t)
-
-# Rescale times for goodness of fit testing
+# Rescale each event time by integrating lambda from 0 to t
 rescaled_times <- sapply(eq.data$time_in_days, function(t) {
   if (is.finite(t) && !is.na(t)) {
-    integrate(lambda.fn, 0, t)$value
+    return(integrate(lambda.fn, lower = 0, upper = t)$value)
   } else {
-    NA
+    return(NA)
   }
 })
-rescaled_interarrivals <- diff(c(0, rescaled_times))
 
-# KS test on rescaled interarrival times
+# Compute rescaled interarrival times
+rescaled_interarrivals <- diff(c(0, rescaled_times))  # Add 0 to start
+
+### KS Goodness-of-fit test for Exp(1) ###
 ks_result <- ks.test(rescaled_interarrivals, "pexp", 1)
 print(ks_result)
 
-# Empirical CDF of observed times
-elapsed_times <- sort(eq.data$time_in_days)
-n <- length(elapsed_times)
-empirical_cdf <- (1:n)/n
-
-# Theoretical CDF based on scaled Lambda(t)
-Lambda.fn <- function(t) {
-  sapply(t, function(x) {
-    tryCatch(integrate(lambda.fn, 0, x)$value,
-             error = function(e) NA)
-  })
-}
-theoretical_cdf <- Lambda.fn(elapsed_times)
-theoretical_cdf <- theoretical_cdf / max(theoretical_cdf, na.rm = TRUE)  # Normalize to 1
-
-# Plot empirical vs theoretical CDF
-plot(elapsed_times, empirical_cdf, type = "s", lwd = 2, col = "black",
-     xlab = "Days since January 1, 2020", ylab = "CDF")
-lines(elapsed_times, theoretical_cdf, col = "blue", lwd = 2)
-legend("bottomright", legend = c("Empirical CDF", "Theoretical CDF"),
-       col = c("black", "blue"), lwd = 2)
+### Plotting λ(t) ###
+plot(median.time, lambda, xlab = "Days since January 1, 2020", ylab = "Tornadoes per Day", pch = 1)
+lines(median.time, lambda.fn(median.time), lwd = 2, col = "blue")
+legend("topright",
+       legend = c("Observed Daily Intensity (per week)", "Estimated λ(t)"),
+       col = c("black", "blue"),
+       pch = c(1, NA),
+       lty = c(NA, 1),
+       lwd = c(1, 2),
+       pt.cex = 1.2,
+       bty = "o")
