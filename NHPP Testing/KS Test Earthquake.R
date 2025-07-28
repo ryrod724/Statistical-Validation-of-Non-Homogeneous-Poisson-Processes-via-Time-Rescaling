@@ -100,7 +100,7 @@ plot(median.time, lambda,
 lines(median.time, lambda.fn(median.time), lwd=2, col="blue")
 
 legend("topright", 
-       legend = c("Observed Weekly Intensity", "Estimated λ(t)"), 
+       legend = c("Observed Daily Intensity (per week)", "Estimated λ(t)"), 
        col = c("black", "blue"), 
        pch = c(1, NA), 
        lty = c(NA, 1), 
