@@ -6,7 +6,7 @@ library(lubridate)
 library(readr)
 
 # Load data
-eq.data <- read_csv("/Users/ryanrodrigue/Downloads/tnUS.csv") %>%
+eq.data <- read_csv("tornadoes.csv") %>%
   filter(st %in% c("OK", "TX", "KS", "NE"), yr %in% c(2020))
 
 eq.data$datetime <- as.POSIXct(eq.data$datetime_utc, format = "%Y-%m-%d %H:%M:%S")
